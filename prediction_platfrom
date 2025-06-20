@@ -102,12 +102,12 @@ class Animation(animation.Animation):
                     ydata = i['datas'][line.y_name][-window_size:]
                     line.set_ydata(ydata)
                     line.set_xdata(xdata)
-                    print(f"Updated {line.name}: x={len(xdata)}, y={len(ydata)}")
+                    # print(f"Updated {line.name}: x={len(xdata)}, y={len(ydata)}")
 
         # 取所有x的最小最大值并转换
 
         x_min, x_max, y_min, y_max = self.get_ax_max_min(line_datas[0]['datas'], 'Date', 'Close', window_size)
-        print(x_min, x_max, y_min, y_max)
+        # print(x_min, x_max, y_min, y_max)
         x_min = float(mdates.date2num(x_min))
         x_max = float(mdates.date2num(x_max))
         self.ax.set_xlim(x_min, x_max)
@@ -135,7 +135,10 @@ class TS_Value_Prediction():
         
 
     def mean_split_window(self, window_size):
+        print(self.org_data[-window_size:].reset_index(drop=True))
+        
         return self.org_data[-window_size:].reset_index(drop=True)
+
 
     def mean_prediction(
             self, 
@@ -147,6 +150,7 @@ class TS_Value_Prediction():
         window_df  = self.mean_split_window(window)
         avg = window_df [target_column].mean()# Assuming daily frequency
         self.prdt_data.loc[len(self.prdt_data.index)] ={time_column: next_timestamp, target_column: avg}  # Append the prediction value to the series
+        # print(self.prdt_data)
         return self.prdt_data
 
     def prediction(self,window:int,next_timestamp:pd.Timestamp,time_column:str='Date',target_column:str='Close'):
