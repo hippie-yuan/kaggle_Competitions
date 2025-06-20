@@ -1,0 +1,194 @@
+import numpy as np
+import yfinance as yf
+from datetime import datetime,timedelta
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import time
+from functools import partial
+
+from matplotlib import animation
+
+import matplotlib.lines as line
+
+
+class Data_generator:
+    def __init__(self, path, index:int=1000):
+        self.index = index
+        self.data = pd.read_csv(path)
+        self.data['Date'] = pd.to_datetime(self.data['Date'], utc=True).dt.tz_convert('Asia/Shanghai')
+        self.next_org_datas = self.data.iloc[:self.index].reset_index(drop=True)
+
+    def get_date_column_df(self,columns_names:list):
+        for column_name in columns_names:
+            if column_name not in self.data.columns:
+                raise ValueError(f"Column '{column_name}' does not exist in the data.")
+        return self.data[[columns_names]].reset_index(drop=True)
+    
+    def get_initial_data(self,column_names:list):
+        return self.data.iloc[:self.index][column_names].reset_index(drop=True)
+    
+    def iter_next_org_datas(self,day_column_name:str='Date'):
+        self.index = self.index + 1
+        self.next_org_datas=self.data.iloc[:self.index].reset_index(drop=True)
+        # time.sleep(0.55)
+        #return timestamp and data[:index]
+        yield self.data.iloc[self.index][day_column_name],self.data[['Date','Close']][:self.index]
+    
+    def get_current_data(self, column_names:list):
+        """获取当前索引位置的数据"""
+        return self.data.iloc[:self.index][column_names].reset_index(drop=True)
+    
+ani = None
+
+class Animation(animation.Animation):
+    def __init__(self, line_propertys:list):
+        # 1. 只在构造函数中创建一次图形和坐标轴
+        self.fig, self.ax = plt.subplots()
+        self.lines = []
+        for i in line_propertys:
+            line_obj = self.Line(i)
+            self.lines.append(line_obj)
+            # 2. 创建线条后立即将其添加到坐标轴
+            self.ax.add_line(line_obj)
+
+        # 3. 在此处设置初始的静态绘图属性（例如，初始视图范围）
+        self.ax.set_xlim(float(mdates.date2num(datetime(2023, 1, 1))), float(mdates.date2num(datetime(2023, 1, 20))))
+        self.ax.xaxis.set_major_locator(mdates.DayLocator())
+        self.ax.set_ylim(0, 1)
+        self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        self.fig.autofmt_xdate()
+    
+    class Line(line.Line2D):
+        def __init__(self, line_property:dict):
+            self.name = line_property.get('name')
+            self.color = line_property.get('color')
+            super().__init__([], [],color=self.color, label=self.name)
+            self.x_name = line_property.get('x_name')
+            self.y_name = line_property.get('y_name')
+
+    def init_fig(self):
+        print("Initializing artists for animation (init_func)")
+        # 图形和坐标轴已在 __init__ 中创建，线条也已添加。
+        # 此函数仅设置动画开始时线条的初始数据。
+        for line_artist in self.lines:
+            line_artist.set_data([], []) # 确保动画开始时线条是空的
+        return tuple(self.lines)
+    
+    def combine_lines_data(self, datas:list,lines_names:list):
+        combined_data = {}
+        for i in range(len(lines_names)):
+            combined_data[lines_names[i]] = datas[i]
+        return combined_data
+
+    def get_ax_max_min(self, lines_datas:pd.DataFrame, x_name:str, y_name:str, window_size:int=50):
+        x_min,x_max,y_min,y_max=0,0,0,0
+        # print(lines_datas)
+        x_min = lines_datas[x_name][-window_size:].min()
+        x_max = lines_datas[x_name][-window_size:].max()
+        y_min = lines_datas[y_name][-window_size:].min()
+        y_max = lines_datas[y_name][-window_size:].max()
+
+        return x_min, x_max, y_min, y_max
+
+    def update_fig(self, line_datas:list[dict], window_size:int=50):
+        print("Updating plot")
+        
+        for line in self.lines:
+            for i in line_datas:
+                if line.name==i['name']:
+                    # 转换x轴为matplotlib能识别的数字
+                    xdata = mdates.date2num(i['datas'][line.x_name][-window_size:])
+                    ydata = i['datas'][line.y_name][-window_size:]
+                    line.set_ydata(ydata)
+                    line.set_xdata(xdata)
+                    print(f"Updated {line.name}: x={len(xdata)}, y={len(ydata)}")
+
+        # 取所有x的最小最大值并转换
+
+        x_min, x_max, y_min, y_max = self.get_ax_max_min(line_datas[0]['datas'], 'Date', 'Close', window_size)
+        print(x_min, x_max, y_min, y_max)
+        x_min = float(mdates.date2num(x_min))
+        x_max = float(mdates.date2num(x_max))
+        self.ax.set_xlim(x_min, x_max)
+        self.ax.set_ylim(y_min * 0.98, y_max * 1.02)
+        return tuple(self.lines) + (self.ax,)
+
+    def Animation(self, frames, interval=500, cache_frame_data=False):
+        return animation.FuncAnimation(
+            self.fig,
+            self.update_fig,
+            frames=frames,
+            init_func=self.init_fig,
+            interval=interval,
+            cache_frame_data=False,
+            blit=False
+        )
+
+class TS_Value_Prediction():
+    window_size = 0  # Default window size for moving average
+
+    def __init__(self, data:pd.DataFrame,target_columns:list=['Close']):
+        self.org_data = data
+        self.prdt_data = data.copy()
+        self.prdt_data[target_columns] = 0  # Initialize prediction data with zeros
+        
+
+    def mean_split_window(self, window_size):
+        return self.org_data[-window_size:].reset_index(drop=True)
+
+    def mean_prediction(
+            self, 
+            window:int,
+            next_timestamp:pd.Timestamp,
+            time_column:str='Date',
+            target_column:str='Close'
+            ):
+        window_df  = self.mean_split_window(window)
+        avg = window_df [target_column].mean()# Assuming daily frequency
+        self.prdt_data.loc[len(self.prdt_data.index)] ={time_column: next_timestamp, target_column: avg}  # Append the prediction value to the series
+        return self.prdt_data
+
+    def prediction(self,window:int,next_timestamp:pd.Timestamp,time_column:str='Date',target_column:str='Close'):
+        return self.mean_prediction(window,next_timestamp,time_column,target_column)
+
+def data_stream_generator(nvda_hist_class, nvda_prdt_class):
+    while True:
+        try:
+            timestamp, org_data = next(nvda_hist_class.iter_next_org_datas('Date'))
+            prdt_data = nvda_prdt_class.prediction(5, timestamp, 'Date', 'Close')
+            data_stream = [
+                {'name': 'Real Time Price', 'datas': org_data},
+                {'name': 'Prediction Price', 'datas': prdt_data}
+            ]
+            yield data_stream
+        except StopIteration:
+            break
+
+def main():
+    nvda_hist_class = Data_generator('nvda_hist.csv')
+    nvda_hist = nvda_hist_class.get_initial_data(['Date', 'Close'])
+    nvda_prdt_class= TS_Value_Prediction(nvda_hist)
+    line_propertys = [
+        {'name': 'Real Time Price', 'color': 'blue','x_name':'Date','y_name':'Close'},
+        {'name': 'Prediction Price', 'color': 'orange','x_name':'Date','y_name':'Close'}
+    ]
+    global ani
+    ani = Animation(line_propertys)
+    
+    # 创建数据流生成器
+    data_stream = data_stream_generator(nvda_hist_class, nvda_prdt_class)
+    
+    # Animation 方法返回一个 FuncAnimation 对象。
+    # 将其赋值给 'ani' 以防止被过早地垃圾回收。
+    ani = ani.Animation(
+        frames=data_stream,
+        interval=500,
+        cache_frame_data=False
+    )
+
+    plt.show()
+
+if __name__ == "__main__":
+    main()
+    print('over')
